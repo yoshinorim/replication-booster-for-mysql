@@ -1,0 +1,20 @@
+Replication Booster -- A Tool for Prefetching MySQL Slave Relay Logs, to make SQL Thread faster
+
+How to use:
+* Install boost if not installed (recommended version is 1.39 or higher)
+ (On RHEL/CentOS5, you can get boost 1.39+ from ATrpms repository)
+* Install Binlog API (https://code.launchpad.net/mysql-replication-listener)
+* make
+* make install
+* Run replication_booster
+
+
+Limitations:
+* This project has just been started and code quality and performance should be improved more.
+* Replication Booster uses Binlog API. Binlog API is currently (Oct 2011) pre-alpha so make sure to intensively test by yourself, though Replication Booster uses limited features of Binlog API. For example, you may fail to build Replication Booster when Binlog API interface has been changed.
+
+License: GNU General Public License version 2
+
+Author: DeNA Co.,Ltd. <Yoshinori.Matsunobu@gmail.com>
+
+
