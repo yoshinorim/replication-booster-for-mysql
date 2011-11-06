@@ -4,10 +4,19 @@ How to use:
 * Install boost if not installed (recommended version is 1.39 or higher)
  (On RHEL/CentOS5, you can get boost 1.39+ from ATrpms repository)
 * Install Binlog API (https://code.launchpad.net/mysql-replication-listener)
+* cmake .
 * make
 * make install
 * Run replication_booster
 
+If you have a Replication Listener in a non-standard path (for
+example, it is not installed), you can add a search prefix when
+executing CMake in the following way:
+
+  cmake . -DCMAKE_PREFIX_PATH=<path to replication listener>
+
+This will find the library in the "lib" directory and the include
+files in the "include" directory of the repository.
 
 Limitations:
 * This project has just been started and code quality and performance should be improved more.

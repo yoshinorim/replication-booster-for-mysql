@@ -13,3 +13,7 @@ replication_booster
 *.lai
 *.la
 *.a
+
+# CMake-generated files
+CMakeCache.txt
+CMakeFiles/*
