@@ -102,6 +102,7 @@ void* prefetch_worker(void *worker_info)
   uint64_t converted_queries= 0;
   uint64_t executed_selects= 0;
   uint64_t error_selects= 0;
+  my_bool reconnect= true;
 
   mysql= mysql_init((MYSQL*)0);
   if (!mysql)
@@ -110,6 +111,8 @@ void* prefetch_worker(void *worker_info)
     goto err;
   }
   mysql_options(mysql, MYSQL_READ_DEFAULT_GROUP, "client");
+  mysql_options(mysql, MYSQL_OPT_RECONNECT, &reconnect);
+
   if ( !mysql_real_connect(mysql, opt_slave_host, opt_slave_user, opt_slave_password, NULL, opt_slave_port, opt_slave_socket, 0) )
   {
     print_log("ERROR: Worker failed to connect to MySQL: %d, %s", mysql_errno(mysql),mysql_error(mysql));

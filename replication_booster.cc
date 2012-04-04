@@ -371,6 +371,7 @@ static MYSQL* init_mysql_config()
   int rc;
   uint version;
   char *buf;
+  my_bool reconnect= true;
   if (opt_slave_socket)
     opt_slave_host = NULL;
 
@@ -387,6 +388,8 @@ static MYSQL* init_mysql_config()
     goto err;
   }
   mysql_options(mysql, MYSQL_READ_DEFAULT_GROUP, "client");
+  mysql_options(mysql, MYSQL_OPT_RECONNECT, &reconnect);
+
   if ( !mysql_real_connect(mysql, opt_slave_host, opt_admin_user, opt_admin_password, NULL, opt_slave_port, opt_slave_socket, 0) )
   {
     print_log("ERROR: Failed to connect to MySQL: %d, %s", mysql_errno(mysql),mysql_error(mysql));
