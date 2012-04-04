@@ -40,7 +40,7 @@ using mysql::system::Binlog_file_driver;
 using mysql::system::Binary_log_driver;
 
 #ifdef DEBUG
-#define  DBUG_PRINT(format, ...) print_log(format, __VA_ARGS__)
+#define  DBUG_PRINT(format, ...) print_log(format, ##__VA_ARGS__)
 #else
 #define  DBUG_PRINT(format, ...)
 #endif
@@ -103,6 +103,7 @@ typedef struct worker_info
 
 void *prefetch_worker(void *worker_info);
 void print_log(const char *format, ...);
+void print_log(const std::string &str);
 void free_query(query_t *query, char *select = NULL);
 int check_local(const char *hostname_or_ip);
 

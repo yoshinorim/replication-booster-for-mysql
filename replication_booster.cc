@@ -73,6 +73,11 @@ void print_log(const char *format, ...)
   fprintf(stderr, "\n");
 }
 
+void print_log(const std::string &str)
+{
+  print_log("%s", str.c_str());
+}
+
 void free_query(query_t *query, char *select)
 {
   if(select != NULL)
