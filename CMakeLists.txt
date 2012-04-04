@@ -23,6 +23,12 @@ set(Boost_USE_STATIC_LIBS TRUE)
 find_package(Boost REQUIRED system thread regex)
 include_directories(${Boost_INCLUDE_DIRS})
 
+# Add DEBUG definition for debug build types.
+if (CMAKE_BUILD_TYPE STREQUAL "Debug" OR
+    CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+  add_definitions("-DDEBUG")
+endif()
+
 add_executable(replication_booster ${SOURCE})
 target_link_libraries(replication_booster
   ${Boost_LIBRARIES} ${Replication_LIBRARY} ${MySQL_LIBRARY})
