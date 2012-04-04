@@ -4,7 +4,8 @@ cmake_minimum_required(VERSION 2.6)
 set(SOURCE replication_booster.cc prefetch_worker.cc options.cc check_local.cc)
 
 # Find MySQL client library and header files
-find_library(MySQL_LIBRARY NAMES mysqlclient_r mysqlclient)
+find_library(MySQL_LIBRARY NAMES mysqlclient_r mysqlclient PATHS
+/usr/lib64/mysql /usr/lib/mysql)
 find_path(MySQL_INCLUDE_DIR mysql.h
   /usr/local/include/mysql /usr/include/mysql)
 include_directories(${MySQL_INCLUDE_DIR})
