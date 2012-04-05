@@ -104,7 +104,7 @@ void* prefetch_worker(void *worker_info)
   uint64_t error_selects= 0;
   my_bool reconnect= true;
 
-  mysql= mysql_init((MYSQL*)0);
+  mysql= mysql_init(NULL);
   if (!mysql)
   {
     print_log("ERROR: mysql_init failed on worker.");

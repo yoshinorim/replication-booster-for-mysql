@@ -85,21 +85,21 @@ void print_version()
 
 void get_options(int argc, char **argv)
 {
-  int c, opt_ind= 0;
+  int c, value, opt_ind= 0;
   while((c= getopt_long(argc, argv, "?vt:o:s:m:u:p:a:b:h:P:S:", long_options, &opt_ind)) != EOF)
   {
     switch(c)
     {
       case '?': usage(); break;
       case 'v': print_version(); break;
-      case 't': opt_workers= atoi(optarg);
-        if (opt_workers < 1) opt_workers= 1;
+      case 't': value= atoi(optarg);
+        opt_workers= value < 1 ? 1 : value;
         break;
-      case 'o': opt_skip_events= atoi(optarg);
-        if (opt_skip_events < 0) opt_skip_events= 0;
+      case 'o': value= atoi(optarg);
+        opt_skip_events= value < 0 ? 0 : value;
         break;
-      case 's': opt_read_ahead_seconds= atoi(optarg);
-        if (opt_read_ahead_seconds < 1) opt_read_ahead_seconds= 1;
+      case 's': value= atoi(optarg);
+        opt_read_ahead_seconds= value < 1 ? 1 : value;
         break;
       case 'm': opt_sleep_millis_at_read_limit= atoi(optarg)*1000; break;
       case 'u': opt_slave_user= optarg;  break;

@@ -64,7 +64,9 @@ void print_log(const char *format, ...)
   gettimeofday(&tv, 0);
   tt= tv.tv_sec;
   tm= localtime(&tt);
-  fprintf(stderr, "%04d-%02d-%02d %02d:%02d:%02d: ", tm->tm_year+1900, tm->tm_mon+1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec);
+  fprintf(stderr, "%04d-%02d-%02d %02d:%02d:%02d: ",
+          tm->tm_year+1900, tm->tm_mon+1, tm->tm_mday,
+          tm->tm_hour, tm->tm_min, tm->tm_sec);
 
   va_list args;
   va_start(args, format);
@@ -88,7 +90,7 @@ void free_query(query_t *query, char *select)
 
 static double timediff(struct timeval tv0, struct timeval tv1)
 {
-  return (tv1.tv_sec - tv0.tv_sec) + (double)((double)tv1.tv_usec*1e-6 - (double)tv0.tv_usec*1e-6);
+  return (tv1.tv_sec - tv0.tv_sec) + (tv1.tv_usec*1e-6 - tv0.tv_usec*1e-6);
 }
 
 static int connect_binlog_file(Binary_log *binlog)
@@ -179,7 +181,9 @@ static status_t *read_binlog(Binary_log *binlog, int start_pos, bool init = fals
     status->next_pos= status->next_pos + event_length;
     status->event_type= event->header()->type_code;
     stat_parsed_binlog_events++;
-    DBUG_PRINT("Event type: %s length: %d current pos: %d next pos: %d timestamp: %d", mysql::system::get_event_type_str(event->get_event_type()), event_length, status->current_pos, status->next_pos, timestamp);
+    DBUG_PRINT("Event type: %s length: %d current pos: %d next pos: %d timestamp: %d",
+               mysql::system::get_event_type_str(event->get_event_type()), event_length,
+               status->current_pos, status->next_pos, timestamp);
 
     if (start)
     {
@@ -189,7 +193,8 @@ static status_t *read_binlog(Binary_log *binlog, int start_pos, bool init = fals
 
     if (timestamp >= sql_thread_timestamp + opt_read_ahead_seconds)
     {
-      DBUG_PRINT("Reached end timestamp: %d, sql thread timestamp: %d", timestamp, sql_thread_timestamp);
+      DBUG_PRINT("Reached end timestamp: %d, sql thread timestamp: %d",
+                 timestamp, sql_thread_timestamp);
       stat_reached_ahead_relay_log++;
       usleep(opt_sleep_millis_at_read_limit);
       delete event;
@@ -293,7 +298,8 @@ static void read_current_relay_info()
   fp= fopen(relay_log_info_path, "r");
   if (!fp)
   {
-    print_log("ERROR: Failed to open %s, %d %s", relay_log_info_path, errno, strerror(errno));
+    print_log("ERROR: Failed to open %s, %d %s",
+              relay_log_info_path, errno, strerror(errno));
     sleep(100);
     exit(1);
   }
@@ -381,7 +387,7 @@ static MYSQL* init_mysql_config()
   if (opt_slave_password && !opt_admin_password)
     opt_admin_password= opt_slave_password;
 
-  mysql= mysql_init((MYSQL*)0);
+  mysql= mysql_init(NULL);
   if (!mysql)
   {
     print_log("ERROR: mysql_init failed.");
@@ -390,9 +396,12 @@ static MYSQL* init_mysql_config()
   mysql_options(mysql, MYSQL_READ_DEFAULT_GROUP, "client");
   mysql_options(mysql, MYSQL_OPT_RECONNECT, &reconnect);
 
-  if ( !mysql_real_connect(mysql, opt_slave_host, opt_admin_user, opt_admin_password, NULL, opt_slave_port, opt_slave_socket, 0) )
+  if ( !mysql_real_connect(mysql, opt_slave_host, opt_admin_user,
+                           opt_admin_password, NULL, opt_slave_port,
+                           opt_slave_socket, 0) )
   {
-    print_log("ERROR: Failed to connect to MySQL: %d, %s", mysql_errno(mysql),mysql_error(mysql));
+    print_log("ERROR: Failed to connect to MySQL: %d, %s",
+              mysql_errno(mysql),mysql_error(mysql));
     goto err;
   }
 
@@ -426,7 +435,11 @@ err:
   return NULL;
 }
 
-static void set_shutdown(int sig)
+extern "C" {
+  static void set_shutdown(int);
+}
+
+static void set_shutdown(int)
 {
   shutdown_program= true;
 }
@@ -518,7 +531,8 @@ static void* rli_reader_thread(void* arg)
       rc= mysql_query(mysql, "SHOW SLAVE STATUS");
       if (rc)
       {
-        print_log("ERROR: Could not execute SHOW SLAVE STATUS: %d %s", mysql_errno(mysql),mysql_error(mysql)); 
+        print_log("ERROR: Could not execute SHOW SLAVE STATUS: %d %s",
+                  mysql_errno(mysql),mysql_error(mysql));
         shutdown_program= true;
         goto end;
       }
@@ -534,7 +548,9 @@ static void* rli_reader_thread(void* arg)
         }
         if (strcmp(row[i], "Yes") && is_sql_thread_running)
         {
-          print_log("WARN: SQL Thread is not running! Sleeping until SQL Thread starts. Check configurations for details.");
+          print_log("WARN: SQL Thread is not running! "
+                    "Sleeping until SQL Thread starts. "
+                    "Check configurations for details.");
           is_sql_thread_running= false;
         } else if (!strcmp(row[i], "Yes") && !is_sql_thread_running)
         {
@@ -542,7 +558,7 @@ static void* rli_reader_thread(void* arg)
           is_sql_thread_running= true;
         }
       }
-      mysql_free_result(result); 
+      mysql_free_result(result);
     }
   }
 end:
@@ -568,7 +584,7 @@ int main(int argc, char **argv)
   if (opt_admin_password == NULL)
     opt_admin_password= opt_admin_password;
   if (mysql_library_init(0, NULL, NULL)) {
-    print_log("Could not initialize MySQL library.\n");
+    print_log("Could not initialize MySQL library.");
     exit(1);
   }
   init_signals();
@@ -584,7 +600,8 @@ int main(int argc, char **argv)
   sql_thread_relay_log_path= new char[PATH_MAX+1];
   read_current_relay_info();
   pos= sql_thread_pos;
-  print_log("Reading relay log file: %s from relay log pos:%lu", sql_thread_relay_log_path, sql_thread_pos);
+  print_log("Reading relay log file: %s from relay log pos: %lu",
+            sql_thread_relay_log_path, sql_thread_pos);
 
   worker_thread_ids= new pthread_t[opt_workers];
   for (uint i=0; i< opt_workers; i++)
@@ -593,14 +610,14 @@ int main(int argc, char **argv)
     memset(info, 0, sizeof(worker_info_t));
     queue[i]= new query_queue();
     info->worker_id= i;
-    if (pthread_create(&(info->ptid), NULL, prefetch_worker, (void*)info))
+    if (pthread_create(&(info->ptid), NULL, prefetch_worker, info))
     {
       print_log("ERROR: Failed to create worker worker_thread_ids!");
       goto err;
     }
     worker_thread_ids[i]= info->ptid;
   }
-  if (pthread_create(&rli_reader_thread_id, NULL, rli_reader_thread, (void*)mysql))
+  if (pthread_create(&rli_reader_thread_id, NULL, rli_reader_thread, mysql))
   {
       print_log("ERROR: Failed to create relay log reader thread!");
       goto err;
