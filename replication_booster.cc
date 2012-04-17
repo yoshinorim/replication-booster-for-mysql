@@ -479,18 +479,30 @@ static void print_status(FILE *stream)
 
 static void print_statistics(FILE *stream)
 {
+  uint64_t popped_queries, old_queries, discarded_queries;
+  uint64_t converted_queries, executed_selects, error_selects;
+
+  pthread_mutex_lock(&worker_mutex);
+  popped_queries = stat_popped_queries;
+  old_queries = stat_old_queries;
+  discarded_queries = stat_discarded_queries;
+  converted_queries = stat_converted_queries;
+  executed_selects = stat_executed_selects;
+  error_selects = stat_error_selects;
+  pthread_mutex_unlock(&worker_mutex);
+
   fprintf(stream, "Statistics:\n");
   fprintf(stream, " Parsed binlog events: %lu\n", stat_parsed_binlog_events);
   fprintf(stream, " Skipped binlog events by offset: %lu\n", stat_skipped_binlog_events);
   fprintf(stream, " Unrelated binlog events: %lu\n", stat_unrelated_binlog_events);
   fprintf(stream, " Queries discarded in front: %lu\n", stat_discarded_in_front_queries);
   fprintf(stream, " Queries pushed to workers: %lu\n", stat_pushed_queries);
-  fprintf(stream, " Queries popped by workers: %lu\n", stat_popped_queries);
-  fprintf(stream, " Old queries popped by workers: %lu\n", stat_old_queries);
-  fprintf(stream, " Queries discarded by workers: %lu\n", stat_discarded_queries);
-  fprintf(stream, " Queries converted to select: %lu\n", stat_converted_queries);
-  fprintf(stream, " Executed SELECT queries: %lu\n", stat_executed_selects);
-  fprintf(stream, " Error SELECT queries: %lu\n", stat_error_selects);
+  fprintf(stream, " Queries popped by workers: %lu\n", popped_queries);
+  fprintf(stream, " Old queries popped by workers: %lu\n", old_queries);
+  fprintf(stream, " Queries discarded by workers: %lu\n", discarded_queries);
+  fprintf(stream, " Queries converted to select: %lu\n", converted_queries);
+  fprintf(stream, " Executed SELECT queries: %lu\n", executed_selects);
+  fprintf(stream, " Error SELECT queries: %lu\n", error_selects);
   fprintf(stream, " Number of times to read relay log limit: %lu\n", stat_reached_ahead_relay_log);
   fprintf(stream, " Number of times to reach end of relay log: %lu\n", stat_reached_end_of_relay_log);
 }
