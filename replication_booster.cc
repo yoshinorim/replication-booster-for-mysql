@@ -38,7 +38,8 @@ pthread_mutex_t worker_mutex;
 pthread_mutex_t relay_log_pos_mutex;
 enum relay_log_info_type rli_type= RLI_TYPE_FILE;
 bool shutdown_program= false;
-
+unsigned long prefetch_position= 0;
+uint32_t prefetch_timestamp= 0;
 bool is_sql_thread_running= true;
 
 uint64_t stat_parsed_binlog_events= 0;
@@ -169,6 +170,7 @@ static status_t *read_binlog(Binary_log *binlog, int start_pos, bool init = fals
     }
     bool delete_event= true;
     Binary_log_event *event;
+    prefetch_position= binlog->get_position();
     rc = binlog->wait_for_next_event(&event);
     if (rc == ERR_EOF)
     {
@@ -178,7 +180,7 @@ static status_t *read_binlog(Binary_log *binlog, int start_pos, bool init = fals
     }
     status->code= READING;
     status->got_rotate_event= false;
-    uint32_t timestamp= event->header()->timestamp;
+    uint32_t timestamp= prefetch_timestamp= event->header()->timestamp;
     int event_length= event->header()->event_length;
     status->current_pos= status->next_pos;
     status->next_pos= status->next_pos + event_length;
@@ -455,6 +457,26 @@ static void init_signals()
   return;
 }
 
+static inline const char *bool_to_str(bool v)
+{
+  return v ? "true" : "false";
+}
+
+static void print_status(FILE *stream)
+{
+  fprintf(stream, "Status:\n");
+  pthread_mutex_lock(&relay_log_pos_mutex);
+  fprintf(stream, "  Relay log file: %s\n", sql_thread_relay_log_path);
+  fprintf(stream, "  Relay log (SQL thread) position: %lu\n", sql_thread_pos);
+  pthread_mutex_unlock(&relay_log_pos_mutex);
+  fprintf(stream, "  SQL thread timestamp: %u\n", sql_thread_timestamp);
+  fprintf(stream, "  Prefetch event timestamp: %u\n", prefetch_timestamp);
+  fprintf(stream, "  Prefetch event position: %lu\n", prefetch_position);
+  fprintf(stream, "  Is SQL thread running: %s\n",
+          bool_to_str(is_sql_thread_running));
+    fprintf(stream, "  Shutdown program: %s\n", bool_to_str(shutdown_program));
+}
+
 static void print_statistics(FILE *stream)
 {
   fprintf(stream, "Statistics:\n");
@@ -473,7 +495,7 @@ static void print_statistics(FILE *stream)
   fprintf(stream, " Number of times to reach end of relay log: %lu\n", stat_reached_end_of_relay_log);
 }
 
-static bool print_status(int *error)
+static bool make_status_file(int *error)
 {
   int fd = -1;
   bool rv = true;
@@ -493,6 +515,7 @@ static bool print_status(int *error)
   if (! (fp = fdopen(fd, "w")))
     goto err;
 
+  print_status(fp);
   print_statistics(fp);
   fflush(fp);
 
@@ -519,7 +542,7 @@ static void* status_thread(void*)
   {
     sleep(opt_status_update_freq);
     pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &state);
-    if (print_status(&error))
+    if (make_status_file(&error))
       print_log("ERROR: Could not print to status file (%d)", error);
     pthread_setcancelstate(state, NULL);
   }
