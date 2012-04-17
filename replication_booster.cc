@@ -25,7 +25,7 @@
 #include <signal.h>
 #include <libgen.h>
 
-const char *VER= "0.01";
+const char *VER= "0.2";
 query_queue **queue;
 Binary_log *binlog;
 Binlog_file_driver *driver;
