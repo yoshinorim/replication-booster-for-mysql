@@ -23,6 +23,7 @@
 #include <stdarg.h>
 #include <errno.h>
 #include <signal.h>
+#include <libgen.h>
 
 const char *VER= "0.01";
 query_queue **queue;
@@ -51,10 +52,12 @@ uint64_t stat_pushed_queries= 0;
 struct timeval t_begin, t_end;
 pthread_t *worker_thread_ids;
 pthread_t rli_reader_thread_id;
+pthread_t status_thread_id;
 
 char *relay_log_info_path;
 char *data_dir;
 
+std::string dir_name_status_file;
 
 void print_log(const char *format, ...)
 {
@@ -452,22 +455,76 @@ static void init_signals()
   return;
 }
 
-static void print_statistics()
+static void print_statistics(FILE *stream)
 {
-  printf("Statistics:\n");
-  printf(" Parsed binlog events: %lu\n", stat_parsed_binlog_events);
-  printf(" Skipped binlog events by offset: %lu\n", stat_skipped_binlog_events);
-  printf(" Unrelated binlog events: %lu\n", stat_unrelated_binlog_events);
-  printf(" Queries discarded in front: %lu\n", stat_discarded_in_front_queries);
-  printf(" Queries pushed to workers: %lu\n", stat_pushed_queries);
-  printf(" Queries popped by workers: %lu\n", stat_popped_queries);
-  printf(" Old queries popped by workers: %lu\n", stat_old_queries);
-  printf(" Queries discarded by workers: %lu\n", stat_discarded_queries);
-  printf(" Queries converted to select: %lu\n", stat_converted_queries);
-  printf(" Executed SELECT queries: %lu\n", stat_executed_selects);
-  printf(" Error SELECT queries: %lu\n", stat_error_selects);
-  printf(" Number of times to read relay log limit: %lu\n", stat_reached_ahead_relay_log);
-  printf(" Number of times to reach end of relay log: %lu\n", stat_reached_end_of_relay_log);
+  fprintf(stream, "Statistics:\n");
+  fprintf(stream, " Parsed binlog events: %lu\n", stat_parsed_binlog_events);
+  fprintf(stream, " Skipped binlog events by offset: %lu\n", stat_skipped_binlog_events);
+  fprintf(stream, " Unrelated binlog events: %lu\n", stat_unrelated_binlog_events);
+  fprintf(stream, " Queries discarded in front: %lu\n", stat_discarded_in_front_queries);
+  fprintf(stream, " Queries pushed to workers: %lu\n", stat_pushed_queries);
+  fprintf(stream, " Queries popped by workers: %lu\n", stat_popped_queries);
+  fprintf(stream, " Old queries popped by workers: %lu\n", stat_old_queries);
+  fprintf(stream, " Queries discarded by workers: %lu\n", stat_discarded_queries);
+  fprintf(stream, " Queries converted to select: %lu\n", stat_converted_queries);
+  fprintf(stream, " Executed SELECT queries: %lu\n", stat_executed_selects);
+  fprintf(stream, " Error SELECT queries: %lu\n", stat_error_selects);
+  fprintf(stream, " Number of times to read relay log limit: %lu\n", stat_reached_ahead_relay_log);
+  fprintf(stream, " Number of times to reach end of relay log: %lu\n", stat_reached_end_of_relay_log);
+}
+
+static bool print_status(int *error)
+{
+  int fd = -1;
+  bool rv = true;
+  FILE *fp = NULL;
+  char *status_file = NULL;
+  std::string template_path;
+
+  template_path += dir_name_status_file;
+  template_path += "/replication_booster.XXXXXX";
+
+  if (! (status_file = strdup(template_path.c_str())))
+    goto err;
+
+  if ((fd = mkstemp(status_file)) < 0)
+    goto err;
+
+  if (! (fp = fdopen(fd, "w")))
+    goto err;
+
+  print_statistics(fp);
+  fflush(fp);
+
+  rv = rename(status_file, opt_status_file);
+
+err:
+  *error= errno;
+
+  free(status_file);
+
+  if (fp)
+    fclose(fp);
+  else if (fd > -1)
+    close(fd);
+
+  return rv;
+}
+
+static void* status_thread(void*)
+{
+  int state, error;
+
+  while (opt_status_update_freq)
+  {
+    sleep(opt_status_update_freq);
+    pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &state);
+    if (print_status(&error))
+      print_log("ERROR: Could not print to status file (%d)", error);
+    pthread_setcancelstate(state, NULL);
+  }
+
+  return NULL;
 }
 
 static void do_shutdown()
@@ -489,9 +546,11 @@ static void do_shutdown()
     delete queue[i];
   }
   pthread_join(rli_reader_thread_id, NULL);
+  pthread_cancel(status_thread_id);
+  pthread_join(status_thread_id, NULL);
   double total_time= timediff(t_begin,t_end);
   printf("Running duration: %10.3f seconds\n", total_time);
-  print_statistics();
+  print_statistics(stdout);
   mysql_library_end();
   delete[] data_dir;
   delete[] relay_log_info_path;
@@ -621,6 +680,12 @@ int main(int argc, char **argv)
   {
       print_log("ERROR: Failed to create relay log reader thread!");
       goto err;
+  }
+  dir_name_status_file = dirname(strdupa(opt_status_file));
+  if (pthread_create(&status_thread_id, NULL, status_thread, NULL))
+  {
+    print_log("ERROR: Failed to create status thread!");
+    goto err;
   }
   init_binlog_driver(sql_thread_relay_log_path, &url_for_binlog_api);
   DBUG_PRINT("Reading url %s pos: %lu", url_for_binlog_api, pos);

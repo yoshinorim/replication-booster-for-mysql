@@ -35,6 +35,8 @@ extern char *opt_admin_password;
 extern char *opt_slave_host;
 extern int opt_slave_port;
 extern char *opt_slave_socket;
+extern const char *opt_status_file;
+extern uint opt_status_update_freq;
 
 void get_options(int argc, char **argv);
 

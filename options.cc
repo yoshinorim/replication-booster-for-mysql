@@ -36,6 +36,9 @@ char *opt_admin_password= NULL;
 char *opt_slave_host= "localhost";
 int opt_slave_port= 3306;
 char *opt_slave_socket= NULL;
+const char default_status_file[]= "/var/spool/replication_booster.log";
+const char *opt_status_file= default_status_file;
+uint opt_status_update_freq= 30;
 
 struct option long_options[] =
 {
@@ -52,6 +55,8 @@ struct option long_options[] =
   {"host", required_argument, 0, 'h'},
   {"port", required_argument, 0, 'P'},
   {"socket", required_argument, 0, 'S'},
+  {"status", required_argument, 0, 'f'},
+  {"status-freq", required_argument, 0, 'F'},
   {0,0,0,0}
 };
 
@@ -74,6 +79,9 @@ void usage()
   printf(" -h, --host=mysql_host          :MySQL slave hostname or IP address. This must be local address. (default: localhost)\n");
   printf(" -P, --port=mysql_port          :MySQL slave port number (default:3306)\n");
   printf(" -S, --socket=mysql_socket      :MySQL socket file path\n");
+  printf(" -f, --status=file              :Where to store the current status\n");
+  printf(" -F, --status-freq=sec          :How often (in seconds) the status file is updated\n");
+  printf("                                 Default is 30 seconds, 0 to disable.\n");
   exit(1);
 }
 
@@ -86,7 +94,7 @@ void print_version()
 void get_options(int argc, char **argv)
 {
   int c, value, opt_ind= 0;
-  while((c= getopt_long(argc, argv, "?vt:o:s:m:u:p:a:b:h:P:S:", long_options, &opt_ind)) != EOF)
+  while((c= getopt_long(argc, argv, "?vt:o:s:m:u:p:a:b:h:P:S:f:F:", long_options, &opt_ind)) != EOF)
   {
     switch(c)
     {
@@ -109,6 +117,10 @@ void get_options(int argc, char **argv)
       case 'h': opt_slave_host= optarg;  break;
       case 'P': opt_slave_port= atoi(optarg);  break;
       case 'S': opt_slave_socket= optarg;  break;
+      case 'f': opt_status_file= optarg; break;
+      case 'F': value= atoi(optarg);
+        opt_status_update_freq= value < 1 ? 0 : value;
+        break;
       default: usage();  break;
     }
   }
