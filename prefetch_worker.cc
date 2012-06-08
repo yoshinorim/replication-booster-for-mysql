@@ -87,6 +87,29 @@ unmatch:
   return NULL;
 }
 
+struct worker_stats_t
+{
+  uint64_t popped_queries;
+  uint64_t old_queries;
+  uint64_t discarded_queries;
+  uint64_t converted_queries;
+  uint64_t executed_selects;
+  uint64_t error_selects;
+};
+
+static void update_stats(worker_stats_t *stats)
+{
+  static const worker_stats_t reset= {0};
+  pthread_mutex_lock(&worker_mutex);
+  stat_popped_queries += stats->popped_queries;
+  stat_old_queries += stats->old_queries;
+  stat_discarded_queries += stats->discarded_queries;
+  stat_converted_queries += stats->converted_queries;
+  stat_executed_selects += stats->executed_selects;
+  stat_error_selects += stats->error_selects;
+  pthread_mutex_unlock(&worker_mutex);
+  *stats= reset;
+}
 
 void* prefetch_worker(void *worker_info)
 {
@@ -96,20 +119,18 @@ void* prefetch_worker(void *worker_info)
   char current_db[1024]= "";
   worker_info_t *info= (worker_info_t*)worker_info;
   uint worker_id= info->worker_id;
-  uint64_t popped_queries= 0;
-  uint64_t old_queries= 0;
-  uint64_t discarded_queries= 0;
-  uint64_t converted_queries= 0;
-  uint64_t executed_selects= 0;
-  uint64_t error_selects= 0;
+  worker_stats_t stats= {0};
+  my_bool reconnect= true;
 
-  mysql= mysql_init((MYSQL*)0);
+  mysql= mysql_init(NULL);
   if (!mysql)
   {
     print_log("ERROR: mysql_init failed on worker.");
     goto err;
   }
   mysql_options(mysql, MYSQL_READ_DEFAULT_GROUP, "client");
+  mysql_options(mysql, MYSQL_OPT_RECONNECT, &reconnect);
+
   if ( !mysql_real_connect(mysql, opt_slave_host, opt_slave_user, opt_slave_password, NULL, opt_slave_port, opt_slave_socket, 0) )
   {
     print_log("ERROR: Worker failed to connect to MySQL: %d, %s", mysql_errno(mysql),mysql_error(mysql));
@@ -119,17 +140,18 @@ void* prefetch_worker(void *worker_info)
 
   while (1)
   {
+    update_stats(&stats);
     query= queue[worker_id]->wait_and_pop();
     if (query->shutdown)
     {
       delete query;
       goto end;
     }
-    popped_queries++;
+    stats.popped_queries++;
 
     if (query->pos <= sql_thread_pos)
     {
-      old_queries++;
+      stats.old_queries++;
       free_query(query);
       continue;
     }
@@ -139,7 +161,7 @@ void* prefetch_worker(void *worker_info)
     char* select_query= convert_to_select(qev->query, &select_len);
     if (select_query != NULL)
     {
-      converted_queries++;
+      stats.converted_queries++;
       // database has changed
       if (strcmp(current_db, qev->db_name.c_str()))
       {
@@ -155,10 +177,10 @@ void* prefetch_worker(void *worker_info)
       if (ret)
       {
         print_log("ERROR: Got error on query. Error code:%d message:%s. query:%s", mysql_errno(mysql),mysql_error(mysql), select_query);
-        error_selects++;
+        stats.error_selects++;
       } else
       {
-        executed_selects++;
+        stats.executed_selects++;
       }
       free_query(query, select_query);
       result = mysql_store_result(mysql);
@@ -178,14 +200,7 @@ err:
   if (mysql)
     mysql_close(mysql);
   mysql_thread_end();
-  pthread_mutex_lock(&worker_mutex);
-  stat_popped_queries += popped_queries;
-  stat_old_queries += old_queries;
-  stat_discarded_queries += discarded_queries;
-  stat_converted_queries += converted_queries;
-  stat_executed_selects += executed_selects;
-  stat_error_selects += error_selects;
-  pthread_mutex_unlock(&worker_mutex);
+  update_stats(&stats);
   pthread_exit(0);
 }
 
