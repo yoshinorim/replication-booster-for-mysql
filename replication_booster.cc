@@ -23,8 +23,9 @@
 #include <stdarg.h>
 #include <errno.h>
 #include <signal.h>
+#include <libgen.h>
 
-const char *VER= "0.01";
+const char *VER= "0.2";
 query_queue **queue;
 Binary_log *binlog;
 Binlog_file_driver *driver;
@@ -37,7 +38,8 @@ pthread_mutex_t worker_mutex;
 pthread_mutex_t relay_log_pos_mutex;
 enum relay_log_info_type rli_type= RLI_TYPE_FILE;
 bool shutdown_program= false;
-
+unsigned long prefetch_position= 0;
+uint32_t prefetch_timestamp= 0;
 bool is_sql_thread_running= true;
 
 uint64_t stat_parsed_binlog_events= 0;
@@ -51,10 +53,12 @@ uint64_t stat_pushed_queries= 0;
 struct timeval t_begin, t_end;
 pthread_t *worker_thread_ids;
 pthread_t rli_reader_thread_id;
+pthread_t status_thread_id;
 
 char *relay_log_info_path;
 char *data_dir;
 
+std::string dir_name_status_file;
 
 void print_log(const char *format, ...)
 {
@@ -64,13 +68,20 @@ void print_log(const char *format, ...)
   gettimeofday(&tv, 0);
   tt= tv.tv_sec;
   tm= localtime(&tt);
-  fprintf(stderr, "%04d-%02d-%02d %02d:%02d:%02d: ", tm->tm_year+1900, tm->tm_mon+1, tm->tm_mday, tm->tm_hour, tm->tm_min, tm->tm_sec);
+  fprintf(stderr, "%04d-%02d-%02d %02d:%02d:%02d: ",
+          tm->tm_year+1900, tm->tm_mon+1, tm->tm_mday,
+          tm->tm_hour, tm->tm_min, tm->tm_sec);
 
   va_list args;
   va_start(args, format);
   vfprintf(stderr, format, args);
   va_end(args);
   fprintf(stderr, "\n");
+}
+
+void print_log(const std::string &str)
+{
+  print_log("%s", str.c_str());
 }
 
 void free_query(query_t *query, char *select)
@@ -83,7 +94,7 @@ void free_query(query_t *query, char *select)
 
 static double timediff(struct timeval tv0, struct timeval tv1)
 {
-  return (tv1.tv_sec - tv0.tv_sec) + (double)((double)tv1.tv_usec*1e-6 - (double)tv0.tv_usec*1e-6);
+  return (tv1.tv_sec - tv0.tv_sec) + (tv1.tv_usec*1e-6 - tv0.tv_usec*1e-6);
 }
 
 static int connect_binlog_file(Binary_log *binlog)
@@ -159,6 +170,7 @@ static status_t *read_binlog(Binary_log *binlog, int start_pos, bool init = fals
     }
     bool delete_event= true;
     Binary_log_event *event;
+    prefetch_position= binlog->get_position();
     rc = binlog->wait_for_next_event(&event);
     if (rc == ERR_EOF)
     {
@@ -168,13 +180,15 @@ static status_t *read_binlog(Binary_log *binlog, int start_pos, bool init = fals
     }
     status->code= READING;
     status->got_rotate_event= false;
-    uint32_t timestamp= event->header()->timestamp;
+    uint32_t timestamp= prefetch_timestamp= event->header()->timestamp;
     int event_length= event->header()->event_length;
     status->current_pos= status->next_pos;
     status->next_pos= status->next_pos + event_length;
     status->event_type= event->header()->type_code;
     stat_parsed_binlog_events++;
-    DBUG_PRINT("Event type: %s length: %d current pos: %d next pos: %d timestamp: %d", mysql::system::get_event_type_str(event->get_event_type()), event_length, status->current_pos, status->next_pos, timestamp);
+    DBUG_PRINT("Event type: %s length: %d current pos: %d next pos: %d timestamp: %d",
+               mysql::system::get_event_type_str(event->get_event_type()), event_length,
+               status->current_pos, status->next_pos, timestamp);
 
     if (start)
     {
@@ -184,7 +198,8 @@ static status_t *read_binlog(Binary_log *binlog, int start_pos, bool init = fals
 
     if (timestamp >= sql_thread_timestamp + opt_read_ahead_seconds)
     {
-      DBUG_PRINT("Reached end timestamp: %d, sql thread timestamp: %d", timestamp, sql_thread_timestamp);
+      DBUG_PRINT("Reached end timestamp: %d, sql thread timestamp: %d",
+                 timestamp, sql_thread_timestamp);
       stat_reached_ahead_relay_log++;
       usleep(opt_sleep_millis_at_read_limit);
       delete event;
@@ -288,7 +303,8 @@ static void read_current_relay_info()
   fp= fopen(relay_log_info_path, "r");
   if (!fp)
   {
-    print_log("ERROR: Failed to open %s, %d %s", relay_log_info_path, errno, strerror(errno));
+    print_log("ERROR: Failed to open %s, %d %s",
+              relay_log_info_path, errno, strerror(errno));
     sleep(100);
     exit(1);
   }
@@ -366,6 +382,7 @@ static MYSQL* init_mysql_config()
   int rc;
   uint version;
   char *buf;
+  my_bool reconnect= true;
   if (opt_slave_socket)
     opt_slave_host = NULL;
 
@@ -375,16 +392,21 @@ static MYSQL* init_mysql_config()
   if (opt_slave_password && !opt_admin_password)
     opt_admin_password= opt_slave_password;
 
-  mysql= mysql_init((MYSQL*)0);
+  mysql= mysql_init(NULL);
   if (!mysql)
   {
     print_log("ERROR: mysql_init failed.");
     goto err;
   }
   mysql_options(mysql, MYSQL_READ_DEFAULT_GROUP, "client");
-  if ( !mysql_real_connect(mysql, opt_slave_host, opt_admin_user, opt_admin_password, NULL, opt_slave_port, opt_slave_socket, 0) )
+  mysql_options(mysql, MYSQL_OPT_RECONNECT, &reconnect);
+
+  if ( !mysql_real_connect(mysql, opt_slave_host, opt_admin_user,
+                           opt_admin_password, NULL, opt_slave_port,
+                           opt_slave_socket, 0) )
   {
-    print_log("ERROR: Failed to connect to MySQL: %d, %s", mysql_errno(mysql),mysql_error(mysql));
+    print_log("ERROR: Failed to connect to MySQL: %d, %s",
+              mysql_errno(mysql),mysql_error(mysql));
     goto err;
   }
 
@@ -418,7 +440,11 @@ err:
   return NULL;
 }
 
-static void set_shutdown(int sig)
+extern "C" {
+  static void set_shutdown(int);
+}
+
+static void set_shutdown(int)
 {
   shutdown_program= true;
 }
@@ -431,22 +457,109 @@ static void init_signals()
   return;
 }
 
-static void print_statistics()
+static inline const char *bool_to_str(bool v)
 {
-  printf("Statistics:\n");
-  printf(" Parsed binlog events: %lu\n", stat_parsed_binlog_events);
-  printf(" Skipped binlog events by offset: %lu\n", stat_skipped_binlog_events);
-  printf(" Unrelated binlog events: %lu\n", stat_unrelated_binlog_events);
-  printf(" Queries discarded in front: %lu\n", stat_discarded_in_front_queries);
-  printf(" Queries pushed to workers: %lu\n", stat_pushed_queries);
-  printf(" Queries popped by workers: %lu\n", stat_popped_queries);
-  printf(" Old queries popped by workers: %lu\n", stat_old_queries);
-  printf(" Queries discarded by workers: %lu\n", stat_discarded_queries);
-  printf(" Queries converted to select: %lu\n", stat_converted_queries);
-  printf(" Executed SELECT queries: %lu\n", stat_executed_selects);
-  printf(" Error SELECT queries: %lu\n", stat_error_selects);
-  printf(" Number of times to read relay log limit: %lu\n", stat_reached_ahead_relay_log);
-  printf(" Number of times to reach end of relay log: %lu\n", stat_reached_end_of_relay_log);
+  return v ? "true" : "false";
+}
+
+static void print_status(FILE *stream)
+{
+  fprintf(stream, "Status:\n");
+  pthread_mutex_lock(&relay_log_pos_mutex);
+  fprintf(stream, "  Relay log file: %s\n", sql_thread_relay_log_path);
+  fprintf(stream, "  Relay log (SQL thread) position: %lu\n", sql_thread_pos);
+  pthread_mutex_unlock(&relay_log_pos_mutex);
+  fprintf(stream, "  SQL thread timestamp: %u\n", sql_thread_timestamp);
+  fprintf(stream, "  Prefetch event timestamp: %u\n", prefetch_timestamp);
+  fprintf(stream, "  Prefetch event position: %lu\n", prefetch_position);
+  fprintf(stream, "  Is SQL thread running: %s\n",
+          bool_to_str(is_sql_thread_running));
+    fprintf(stream, "  Shutdown program: %s\n", bool_to_str(shutdown_program));
+}
+
+static void print_statistics(FILE *stream)
+{
+  uint64_t popped_queries, old_queries, discarded_queries;
+  uint64_t converted_queries, executed_selects, error_selects;
+
+  pthread_mutex_lock(&worker_mutex);
+  popped_queries = stat_popped_queries;
+  old_queries = stat_old_queries;
+  discarded_queries = stat_discarded_queries;
+  converted_queries = stat_converted_queries;
+  executed_selects = stat_executed_selects;
+  error_selects = stat_error_selects;
+  pthread_mutex_unlock(&worker_mutex);
+
+  fprintf(stream, "Statistics:\n");
+  fprintf(stream, " Parsed binlog events: %lu\n", stat_parsed_binlog_events);
+  fprintf(stream, " Skipped binlog events by offset: %lu\n", stat_skipped_binlog_events);
+  fprintf(stream, " Unrelated binlog events: %lu\n", stat_unrelated_binlog_events);
+  fprintf(stream, " Queries discarded in front: %lu\n", stat_discarded_in_front_queries);
+  fprintf(stream, " Queries pushed to workers: %lu\n", stat_pushed_queries);
+  fprintf(stream, " Queries popped by workers: %lu\n", popped_queries);
+  fprintf(stream, " Old queries popped by workers: %lu\n", old_queries);
+  fprintf(stream, " Queries discarded by workers: %lu\n", discarded_queries);
+  fprintf(stream, " Queries converted to select: %lu\n", converted_queries);
+  fprintf(stream, " Executed SELECT queries: %lu\n", executed_selects);
+  fprintf(stream, " Error SELECT queries: %lu\n", error_selects);
+  fprintf(stream, " Number of times to read relay log limit: %lu\n", stat_reached_ahead_relay_log);
+  fprintf(stream, " Number of times to reach end of relay log: %lu\n", stat_reached_end_of_relay_log);
+}
+
+static bool make_status_file(int *error)
+{
+  int fd = -1;
+  bool rv = true;
+  FILE *fp = NULL;
+  char *status_file = NULL;
+  std::string template_path;
+
+  template_path += dir_name_status_file;
+  template_path += "/replication_booster.XXXXXX";
+
+  if (! (status_file = strdup(template_path.c_str())))
+    goto err;
+
+  if ((fd = mkstemp(status_file)) < 0)
+    goto err;
+
+  if (! (fp = fdopen(fd, "w")))
+    goto err;
+
+  print_status(fp);
+  print_statistics(fp);
+  fflush(fp);
+
+  rv = rename(status_file, opt_status_file);
+
+err:
+  *error= errno;
+
+  free(status_file);
+
+  if (fp)
+    fclose(fp);
+  else if (fd > -1)
+    close(fd);
+
+  return rv;
+}
+
+static void* status_thread(void*)
+{
+  int state, error;
+
+  while (opt_status_update_freq)
+  {
+    sleep(opt_status_update_freq);
+    pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &state);
+    if (make_status_file(&error))
+      print_log("ERROR: Could not print to status file (%d)", error);
+    pthread_setcancelstate(state, NULL);
+  }
+
+  return NULL;
 }
 
 static void do_shutdown()
@@ -468,9 +581,11 @@ static void do_shutdown()
     delete queue[i];
   }
   pthread_join(rli_reader_thread_id, NULL);
+  pthread_cancel(status_thread_id);
+  pthread_join(status_thread_id, NULL);
   double total_time= timediff(t_begin,t_end);
   printf("Running duration: %10.3f seconds\n", total_time);
-  print_statistics();
+  print_statistics(stdout);
   mysql_library_end();
   delete[] data_dir;
   delete[] relay_log_info_path;
@@ -510,7 +625,8 @@ static void* rli_reader_thread(void* arg)
       rc= mysql_query(mysql, "SHOW SLAVE STATUS");
       if (rc)
       {
-        print_log("ERROR: Could not execute SHOW SLAVE STATUS: %d %s", mysql_errno(mysql),mysql_error(mysql)); 
+        print_log("ERROR: Could not execute SHOW SLAVE STATUS: %d %s",
+                  mysql_errno(mysql),mysql_error(mysql));
         shutdown_program= true;
         goto end;
       }
@@ -526,7 +642,9 @@ static void* rli_reader_thread(void* arg)
         }
         if (strcmp(row[i], "Yes") && is_sql_thread_running)
         {
-          print_log("WARN: SQL Thread is not running! Sleeping until SQL Thread starts. Check configurations for details.");
+          print_log("WARN: SQL Thread is not running! "
+                    "Sleeping until SQL Thread starts. "
+                    "Check configurations for details.");
           is_sql_thread_running= false;
         } else if (!strcmp(row[i], "Yes") && !is_sql_thread_running)
         {
@@ -534,7 +652,7 @@ static void* rli_reader_thread(void* arg)
           is_sql_thread_running= true;
         }
       }
-      mysql_free_result(result); 
+      mysql_free_result(result);
     }
   }
 end:
@@ -560,7 +678,7 @@ int main(int argc, char **argv)
   if (opt_admin_password == NULL)
     opt_admin_password= opt_admin_password;
   if (mysql_library_init(0, NULL, NULL)) {
-    print_log("Could not initialize MySQL library.\n");
+    print_log("Could not initialize MySQL library.");
     exit(1);
   }
   init_signals();
@@ -576,7 +694,8 @@ int main(int argc, char **argv)
   sql_thread_relay_log_path= new char[PATH_MAX+1];
   read_current_relay_info();
   pos= sql_thread_pos;
-  print_log("Reading relay log file: %s from relay log pos:%lu", sql_thread_relay_log_path, sql_thread_pos);
+  print_log("Reading relay log file: %s from relay log pos: %lu",
+            sql_thread_relay_log_path, sql_thread_pos);
 
   worker_thread_ids= new pthread_t[opt_workers];
   for (uint i=0; i< opt_workers; i++)
@@ -585,17 +704,23 @@ int main(int argc, char **argv)
     memset(info, 0, sizeof(worker_info_t));
     queue[i]= new query_queue();
     info->worker_id= i;
-    if (pthread_create(&(info->ptid), NULL, prefetch_worker, (void*)info))
+    if (pthread_create(&(info->ptid), NULL, prefetch_worker, info))
     {
       print_log("ERROR: Failed to create worker worker_thread_ids!");
       goto err;
     }
     worker_thread_ids[i]= info->ptid;
   }
-  if (pthread_create(&rli_reader_thread_id, NULL, rli_reader_thread, (void*)mysql))
+  if (pthread_create(&rli_reader_thread_id, NULL, rli_reader_thread, mysql))
   {
       print_log("ERROR: Failed to create relay log reader thread!");
       goto err;
+  }
+  dir_name_status_file = dirname(strdupa(opt_status_file));
+  if (pthread_create(&status_thread_id, NULL, status_thread, NULL))
+  {
+    print_log("ERROR: Failed to create status thread!");
+    goto err;
   }
   init_binlog_driver(sql_thread_relay_log_path, &url_for_binlog_api);
   DBUG_PRINT("Reading url %s pos: %lu", url_for_binlog_api, pos);
